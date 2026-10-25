@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TestLoop</title>
+<style>
+:root{--bg:#EDF3F0;--card:#fff;--ink:#14232B;--mute:#5B6B72;--acc:#0E7C86;--accT:#fff;--coin:#C48A0C;--line:#D3DEDA}
+@media(prefers-color-scheme:dark){:root{--bg:#0F1A1F;--card:#17262D;--ink:#E7F0EE;--mute:#93A5AB;--acc:#3FB6C1;--accT:#08181C;--coin:#E0A526;--line:#27393F}}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,sans-serif;max-width:560px;margin:0 auto;padding:env(safe-area-inset-top,0) 16px 96px}
+h1{font-size:26px;margin:18px 0 2px}h2{font-size:18px;margin:22px 0 8px}p{margin:0;color:var(--mute)}
+.top,.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.bal{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-weight:600}.bal b{color:var(--coin)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
+.btn{background:var(--acc);color:var(--accT);border:0;border-radius:10px;padding:10px 14px;font:600 15px system-ui;cursor:pointer}
+.btn.ghost{background:none;color:var(--acc);border:1px solid var(--acc)}.btn:disabled{opacity:.45}
+.bar{height:8px;background:var(--line);border-radius:9px;overflow:hidden;margin:8px 0 4px}.bar i{display:block;height:100%;background:var(--acc)}
+.dots{display:flex;gap:4px;margin:8px 0}.dots i{flex:1;height:8px;border-radius:3px;background:var(--line)}.dots i.on{background:var(--acc)}
+input,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;margin:6px 0}
+nav{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);display:flex;gap:6px;padding:8px 8px calc(8px + env(safe-area-inset-bottom,0))}
+nav button{flex:1;background:none;border:0;color:var(--mute);font:600 14px system-ui;padding:10px 4px;border-radius:10px}nav button.on{background:var(--bg);color:var(--acc)}
+.tag{font-size:13px;color:var(--mute)}.ok{color:var(--acc);font-weight:600}
+#toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90%;text-align:center}#toast.show{opacity:1}
+</style></head><body>
+<div class="top"><div><h1>TestLoop</h1><p>12 testers. 14 days. Done.</p></div><div class="bal" id="balw" hidden>$<b id="coins">0</b></div></div>
+<main id="app"></main><nav id="nav" hidden><button data-t="find">Test games</button><button data-t="mine">My games</button><button data-t="wallet">Wallet</button><button data-t="admin" hidden>Admin</button></nav>
+<div id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://checkout.flutterwave.com/v3.js"></script>
+<script>
+// 1) Paste your Supabase project URL and anon (publishable) key here.
+var SUPABASE_URL="https://onbamsjlrlizonollrhz.supabase.co",SUPABASE_ANON="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9uYmFtc2pscmxpem9ub2xscmh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3MDM4MzMsImV4cCI6MjEwODI3OTgzM30.Y6RAR3QFj9wdOauOZHplLnz_uzYCQMA9hSmQX5J04Og";
+var FLW_PUBLIC="FLWPUBK_TEST-e2103fd207812e76edc1ea4bf7e60fff-X";
+var sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON);
+var S={tab:"find",user:null,balance:0,earned:0,admin:false,games:[],joins:{},mywd:[],allwd:[],cfg:{fee:800,reward:40,start:0,minWithdraw:500,topups:[800,1600,4000]}},timer=null;
+function $(i){return document.getElementById(i)}
+function esc(t){return String(t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function toast(m){var t=$("toast");t.textContent=m;t.className="show";setTimeout(function(){t.className=""},2500)}
+function dots(n,total){var h="";for(var i=0;i<total;i++)h+="<i class='"+(i<n?"on":"")+"'></i>";return"<div class='dots'>"+h+"</div>"}
+function M(c){return"$"+(c/100).toFixed(2)}
+function N(n){return Number(n).toLocaleString()}
+
+var RPC={
+ listGame:["list_game",function(d){return{p_name:d.name,p_link:d.link}}],
+ joinGame:["join_game",function(d){return{p_game:d.gameId}}],
+ checkIn:["check_in",function(d){return{p_game:d.gameId}}],
+ claimReward:["claim_reward",function(d){return{p_game:d.gameId,p_feedback:d.feedback}}],
+ requestWithdrawal:["request_withdrawal",function(d){return{p_cents:d.cents,p_method:d.method,p_details:d.details,p_name:d.name,p_country:d.country}}],
+ setConfig:["admin_set_prices",function(d){return{p_fee:d.fee,p_reward:d.reward,p_start:d.start,p_min:d.minWithdraw,p_topups:d.topups}}],
+ resolveWithdrawal:["resolve_withdrawal",function(d){return{p_id:d.id,p_status:d.status}}]
+};
+function errMsg(e){
+ if(e&&e.context&&e.context.json)return e.context.json().then(function(j){return j.error||e.message}).catch(function(){return e.message});
+ return Promise.resolve((e&&e.message)||"Something went wrong")}
+function call(name,data,ok){
+ var p;
+ if(name==="deposit")p=sb.functions.invoke("deposit",{body:data});
+ else{var m=RPC[name];p=sb.rpc(m[0],m[1](data))}
+ return p.then(function(r){if(r.error)return Promise.reject(r.error);if(ok)toast(ok);return refresh()})
+  .catch(function(e){errMsg(e).then(toast)})}
+
+function refresh(){
+ if(!S.user)return Promise.resolve();
+ var id=S.user.uid;
+ return Promise.all([
+  sb.from("wallets").select("*").eq("user_id",id).maybeSingle(),
+  sb.from("config").select("*").eq("id",1).maybeSingle(),
+  sb.from("games").select("id,dev,name,testers,completed,reward").order("created",{ascending:false}).limit(100),
+  sb.from("joins").select("*"),
+  sb.from("withdrawals").select("*").order("created",{ascending:false}),
+  sb.from("admins").select("user_id").eq("user_id",id).maybeSingle()
+ ]).then(function(r){
+  var w=r[0].data||{},c=r[1].data;
+  S.balance=w.balance||0;S.earned=w.earned||0;
+  if(c)S.cfg={fee:c.fee,reward:c.reward,start:c.start_bonus,minWithdraw:c.min_withdraw,topups:c.topups};if(c&&c.flw_public)FLW_PUBLIC=c.flw_public;
+  S.games=r[2].data||[];S.joins={};(r[3].data||[]).forEach(function(j){S.joins[j.game_id]=j});
+  var wd=r[4].data||[];S.mywd=wd.filter(function(x){return x.user_id===id});
+  S.admin=!!r[5].data;S.allwd=S.admin?wd.filter(function(x){return x.status==="pending"}):[];
+  render()}).catch(function(){toast("Couldn’t load. Check your connection.")})}
+
+sb.auth.onAuthStateChange(function(ev,session){
+ var u=session&&session.user;S.user=u?{uid:u.id,email:u.email}:null;
+ clearInterval(timer);
+ $("nav").hidden=$("balw").hidden=!u;
+ if(u){refresh();timer=setInterval(refresh,20000)}else render()});
+
+function render(){
+ if(document.activeElement&&/INPUT|TEXTAREA/.test(document.activeElement.tagName))return;
+ var h="",C=S.cfg;$("coins").textContent=M(S.balance+S.earned).slice(1);
+ document.querySelector("nav [data-t=admin]").hidden=!S.admin;
+ document.querySelectorAll("nav button").forEach(function(b){b.className=b.dataset.t===S.tab?"on":""});
+ if(!S.user){h="<div class='card'><h2>Get paid to test apps</h2><p>Open to anyone, anywhere. Join a game, check in for 14 days, share honest feedback and earn real money. Developers list a game and get the 12 testers Google Play asks for.</p></div><div class='card'><input id='em' type='email' placeholder='Email'><input id='pw' type='password' placeholder='Password (6+ characters)'><label class='tag'><input id='ag' type='checkbox' style='width:auto;margin-right:6px'>I am 18 or older and I agree to honest testing: no fake or automated check-ins.</label><div class='row'><button class='btn' onclick='login()'>Sign in</button><button class='btn ghost' onclick='signup()'>Create account</button></div></div>"}
+ else if(S.tab==="find"){
+  var mineJ=S.games.filter(function(g){return S.joins[g.id]});
+  h+="<h2>Your active tests</h2>"+(mineJ.length?"":"<p>Join a game below. Finish 14 days and send feedback to get paid.</p>");
+  mineJ.forEach(function(g){var j=S.joins[g.id],today=new Date().toISOString().slice(0,10);
+   h+="<div class='card'><div class='row'><b>"+esc(g.name)+"</b><span class='tag'>Day "+j.days+" of 14</span></div>"+dots(j.days,14);
+   if(j.paid)h+="<p class='ok'>Paid "+M(g.reward||C.reward)+"</p>";
+   else if(j.days>=14)h+="<textarea id='fb_"+g.id+"' rows='2' placeholder='What worked, what broke, what you would change'></textarea><button class='btn' onclick='claim(\""+g.id+"\")'>Send feedback and get paid</button>";
+   else h+="<div class='row'><button class='btn ghost' onclick='openLink(\""+g.id+"\")'>Open opt-in link</button><button class='btn' "+(j.last===today?"disabled":"")+" onclick='call(\"checkIn\",{gameId:\""+g.id+"\"},\"Checked in\")'>"+(j.last===today?"Done today":"Check in")+"</button></div>";
+   h+="</div>"});
+  h+="<h2>Games that need testers</h2>";
+  S.games.filter(function(g){return g.dev!==S.user.uid}).forEach(function(g){var joined=!!S.joins[g.id],full=g.testers>=12;
+   h+="<div class='card'><div class='row'><div><b>"+esc(g.name)+"</b><div class='tag ok'>Earn "+M(g.reward||C.reward)+"</div></div><button class='btn' "+(joined||full?"disabled":"")+" onclick='call(\"joinGame\",{gameId:\""+g.id+"\"},\"Joined. Opt in on Google Play, then check in daily.\")'>"+(joined?"Joined":full?"Full":"Join test")+"</button></div><div class='bar'><i style='width:"+g.testers/12*100+"%'></i></div><div class='tag'>"+g.testers+" of 12 testers</div></div>"});
+ }
+ else if(S.tab==="mine"){
+  h+=reportHtml();h+="<h2>Add your game</h2><div class='card'><input id='gn' placeholder='Game name'><input id='gl' placeholder='Closed test opt-in link from Play Console'><button class='btn' onclick='addGame()'>List game for "+M(C.fee)+"</button><p class='tag'>Paid from your wallet. Your 12 testers are paid "+M(C.reward)+" each.</p></div><h2>Your games</h2>";
+  var mine=S.games.filter(function(g){return g.dev===S.user.uid});if(!mine.length)h+="<p>No games listed yet.</p>";
+  mine.forEach(function(g){var ready=g.completed>=12;
+   h+="<div class='card'><div class='row'><b>"+esc(g.name)+"</b><span class='tag "+(ready?"ok":"")+"'>"+(ready?"Ready for production":"Test running")+"</span></div><div class='bar'><i style='width:"+g.testers/12*100+"%'></i></div><div class='tag'>"+g.testers+" of 12 testers joined · "+g.completed+" finished 14 days</div>"+(ready?"<p class='ok'>Apply for production access in Play Console.</p>":"")+"<button class='btn ghost' onclick='report(\""+g.id+"\")'>View test report</button></div>"});
+ }
+ else if(S.tab==="wallet"){
+  h+="<h2>Wallet</h2><div class='card'><div class='row'><div><b style='font-size:22px'>"+M(S.earned)+"</b><div class='tag'>Earned. You can withdraw this.</div></div><div><b style='font-size:22px'>"+M(S.balance)+"</b><div class='tag'>Added by card. For listing games.</div></div></div></div>";
+  h+="<h2>Add money</h2><div class='row'>"+C.topups.map(function(c){return"<button class='btn ghost' style='flex:1' onclick='buy("+c+")'>"+M(c)+"</button>"}).join("")+"</div>";
+  h+="<h2>Withdraw</h2><div class='card'><input id='wc' type='number' step='0.01' placeholder='Amount in USD (minimum "+(C.minWithdraw/100).toFixed(2)+")'><input id='wm' placeholder='How to pay you: PayPal, Wise, bank transfer, mobile money'><input id='wd' placeholder='Your PayPal email, or bank / mobile money details'><input id='wn' placeholder='Full name on the account'><input id='wk' placeholder='Country'><button class='btn' onclick='withdraw()'>Request withdrawal</button><p class='tag'>We check each request, then send the money in USD or your local currency.</p></div>";
+  if(S.mywd.length){h+="<h2>Your withdrawals</h2>";S.mywd.forEach(function(w){h+="<div class='card row'><span>"+M(w.amount)+"</span><span class='tag "+(w.status==="paid"?"ok":"")+"'>"+w.status+"</span></div>"})}
+  h+="<br><button class='btn ghost' onclick='sb.auth.signOut()'>Sign out</button>";
+ }
+ else if(S.tab==="admin"&&S.admin){
+  var f=[["fee","Fee to list a game (USD)",C.fee/100],["reward","Paid to each tester per game (USD)",C.reward/100],["start","Free money for new accounts (USD)",C.start/100],["minWithdraw","Minimum withdrawal (USD)",C.minWithdraw/100]];
+  h+="<h2>Prices</h2><div class='card'>"+f.map(function(x){return"<label class='tag'>"+x[1]+"</label><input id='c_"+x[0]+"' type='number' step='0.01' value='"+x[2]+"'>"}).join("")+"<label class='tag'>Add-money amounts in USD, separated by commas</label><input id='c_topups' value='"+C.topups.map(function(c){return c/100}).join(", ")+"'><button class='btn' onclick='saveCfg()'>Save prices</button><p class='tag'>Each game brings in "+M(C.fee)+" and pays testers "+M(12*C.reward)+" in total, so you keep "+M(C.fee-12*C.reward)+" before card fees (about 4%) and payout fees."+(C.fee<=12*C.reward?" This loses money.":"")+"</p></div><h2>Withdrawals to pay</h2>";
+  if(!S.allwd.length)h+="<p>Nothing waiting.</p>";
+  S.allwd.forEach(function(w){h+="<div class='card'><b>"+M(w.amount)+"</b> <span class='tag'>"+esc(w.country)+"</span><div>"+esc(w.name)+"</div><div class='tag'>"+esc(w.method)+" · "+esc(w.details)+"</div><div class='row'><button class='btn' onclick='resolve(\""+w.id+"\",\"paid\")'>Mark paid</button><button class='btn ghost' onclick='resolve(\""+w.id+"\",\"rejected\")'>Reject and refund</button></div></div>"});
+ }
+ $("app").innerHTML=h;
+}
+function reportHtml(){var R=S.report;if(!R)return"";
+ var rows=R.testers.map(function(t){return"<div class='row tag'><span>Tester "+t.n+"</span><span>"+t.days+" of 14 days</span><span>Last check-in "+esc(t.last)+"</span><span>"+(t.feedback?"Feedback sent":"No feedback yet")+"</span></div>"}).join("");
+ var fbs=R.testers.filter(function(t){return t.feedback}).map(function(t){return"<p style='margin:6px 0;color:var(--ink)'>Tester "+t.n+": "+esc(t.feedback)+"</p>"}).join("");
+ return"<h2>Test report: "+esc(R.name)+"</h2><div class='card'>"+(rows||"<p>No testers yet.</p>")+(fbs?"<h2>Feedback</h2>"+fbs:"")+"<div class='row' style='margin-top:10px'><button class='btn' onclick='copyReport()'>Copy summary</button><button class='btn ghost' onclick='S.report=null;render()'>Close</button></div><p class='tag'>Paste the summary into the Play Console production access form, then add what you changed after the feedback.</p></div>"}
+function copyReport(){var R=S.report,fb=R.testers.filter(function(t){return t.feedback}),done=R.testers.filter(function(t){return t.days>=14}).length;
+ var t="Closed test for "+R.name+": "+R.testers.length+" testers joined through the opt-in link. "+done+" checked in on 14 separate days. "+fb.length+" sent written feedback.\\n\\nFeedback received:\\n"+fb.map(function(x){return"- "+x.feedback}).join("\\n")+"\\n\\nChanges I made after this feedback: ";
+ (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){toast("Summary copied")}).catch(function(){toast("Couldn’t copy. Select and copy the feedback above.")})}
+function login(){sb.auth.signInWithPassword({email:$("em").value.trim(),password:$("pw").value}).then(function(r){if(r.error)toast(r.error.message)})}
+function signup(){if(!$("ag").checked){toast("Tick the box to confirm you are 18 or older");return}
+ sb.auth.signUp({email:$("em").value.trim(),password:$("pw").value}).then(function(r){if(r.error)toast(r.error.message);else if(!r.data.session)toast("Check your email to confirm your account")})}
+function addGame(){call("listGame",{name:$("gn").value,link:$("gl").value},"Game listed")}
+function claim(id){call("claimReward",{gameId:id,feedback:$("fb_"+id).value},"Paid into your wallet")}
+function openLink(id){sb.from("game_links").select("link").eq("game_id",id).maybeSingle().then(function(r){if(r.data)window.open(r.data.link,"_blank");else toast("Join the game first")})}
+function report(id){sb.rpc("get_report",{p_game:id}).then(function(r){if(r.error){toast(r.error.message);return}S.report=r.data;render()})}
+function buy(cents){var ref="tl_"+S.user.uid.slice(0,6)+"_"+Date.now();
+ FlutterwaveCheckout({public_key:FLW_PUBLIC,tx_ref:ref,amount:cents/100,currency:"USD",customer:{email:S.user.email},customizations:{title:"TestLoop wallet"},
+  callback:function(r){var tid=r&&(r.transaction_id||r.id);call("deposit",{cents:cents,reference:ref,transactionId:tid},"Money added")},onclose:function(){}})}
+function withdraw(){call("requestWithdrawal",{cents:Math.round(parseFloat($("wc").value)*100),method:$("wm").value,details:$("wd").value,name:$("wn").value,country:$("wk").value},"Withdrawal requested")}
+function saveCfg(){var c=function(k){return Math.round(parseFloat($("c_"+k).value)*100)};
+ call("setConfig",{fee:c("fee"),reward:c("reward"),start:c("start"),minWithdraw:c("minWithdraw"),topups:$("c_topups").value.split(",").map(function(x){return Math.round(parseFloat(x)*100)})},"Prices saved")}
+function resolve(id,st){call("resolveWithdrawal",{id:id,status:st},st==="paid"?"Marked paid":"Rejected and refunded")}
+document.querySelectorAll("nav button").forEach(function(b){b.onclick=function(){S.tab=b.dataset.t;render()}});
+render();
+</script>
+</body></html>
