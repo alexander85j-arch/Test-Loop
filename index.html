@@ -33,11 +33,11 @@ nav button{flex:1;background:none;border:0;color:var(--mute);font:600 14px syste
 <div class="box"><h3>For developers</h3><ol>
 <li>Create a free account and add money to your wallet by card.</li>
 <li>List your app with its Google Play closed-test link.</li>
-<li>Up to 12 testers join your test and check in on 14 different days.</li>
+<li>Testers send you their Google account email. Add each email to your Google Play test list, then tap "I added them".</li><li>Testers check in on 14 different days.</li>
 <li>Read the written feedback and copy the test report into Play Console.</li></ol></div>
 <div class="box"><h3>For testers</h3><ol>
 <li>Create a free account (18 or older, with an Android phone and a Google account).</li>
-<li>Join a game from the Test games tab and install it through its test link.</li>
+<li>Join a game from the Test games tab with your Google account email, and wait for the developer to add you.</li><li>Open the test link and install the app.</li>
 <li>Open the app on 14 different days and tap Check in.</li>
 <li>Write honest feedback, get paid, and request a withdrawal when you reach the minimum.</li></ol></div>
 
@@ -73,7 +73,8 @@ function N(n){return Number(n).toLocaleString()}
 
 var RPC={
  listGame:["list_game",function(d){return{p_name:d.name,p_link:d.link}}],
- joinGame:["join_game",function(d){return{p_game:d.gameId}}],
+ joinGame:["join_game",function(d){return{p_game:d.gameId,p_email:d.email}}],
+ approveTester:["approve_tester",function(d){return{p_game:d.gameId,p_email:d.email}}],
  checkIn:["check_in",function(d){return{p_game:d.gameId}}],
  claimReward:["claim_reward",function(d){return{p_game:d.gameId,p_feedback:d.feedback}}],
  requestWithdrawal:["request_withdrawal",function(d){return{p_cents:d.cents,p_method:d.method,p_details:d.details,p_name:d.name,p_country:d.country}}],
@@ -96,7 +97,7 @@ function refresh(){
  return Promise.all([
   sb.from("wallets").select("*").eq("user_id",id).maybeSingle(),
   sb.from("config").select("*").eq("id",1).maybeSingle(),
-  sb.from("games").select("id,dev,name,testers,completed,reward").order("created",{ascending:false}).limit(100),
+  sb.from("games").select("id,dev,name,testers,completed,reward,pending").order("created",{ascending:false}).limit(100),
   sb.from("joins").select("*"),
   sb.from("withdrawals").select("*").order("created",{ascending:false}),
   sb.from("admins").select("user_id").eq("user_id",id).maybeSingle()
@@ -129,17 +130,18 @@ function render(){
    h+="<div class='card'><div class='row'><b>"+esc(g.name)+"</b><span class='tag'>Day "+j.days+" of 14</span></div>"+dots(j.days,14);
    if(j.paid)h+="<p class='ok'>Paid "+M(g.reward||C.reward)+"</p>";
    else if(j.days>=14)h+="<textarea id='fb_"+g.id+"' rows='2' placeholder='What worked, what broke, what you would change'></textarea><button class='btn' onclick='claim(\""+g.id+"\")'>Send feedback and get paid</button>";
+   else if(!j.approved)h+="<p class='tag'>Waiting for the developer to add your email ("+esc(j.google_email||"")+") to the test. Check back soon.</p>";
    else h+="<div class='row'><button class='btn ghost' onclick='openLink(\""+g.id+"\")'>Open opt-in link</button><button class='btn' "+(j.last===today||j.last_opened!==today?"disabled":"")+" onclick='call(\"checkIn\",{gameId:\""+g.id+"\"},\"Checked in\")'>"+(j.last===today?"Done today":(j.last_opened!==today?"Open link first":"Check in"))+"</button></div>"+(j.last!==today&&j.last_opened!==today?"<p class='tag'>Open the opt-in link and use the app first. Check-in unlocks after you open the link today.</p>":"");
    h+="</div>"});
   h+="<h2>Games that need testers</h2>";
   S.games.filter(function(g){return g.dev!==S.user.uid}).forEach(function(g){var joined=!!S.joins[g.id],full=g.testers>=12;
-   h+="<div class='card'><div class='row'><div><b>"+esc(g.name)+"</b><div class='tag ok'>Earn "+M(g.reward||C.reward)+"</div></div><button class='btn' "+(joined||full?"disabled":"")+" onclick='call(\"joinGame\",{gameId:\""+g.id+"\"},\"Joined. Opt in on Google Play, then check in daily.\")'>"+(joined?"Joined":full?"Full":"Join test")+"</button></div><div class='bar'><i style='width:"+g.testers/12*100+"%'></i></div><div class='tag'>"+g.testers+" of 12 testers</div></div>"});
+   h+="<div class='card'><div class='row'><div><b>"+esc(g.name)+"</b><div class='tag ok'>Earn "+M(g.reward||C.reward)+"</div></div><button class='btn' "+(joined||full?"disabled":"")+" onclick='joinWith(\""+g.id+"\")'>"+(joined?"Joined":full?"Full":"Join test")+"</button></div>"+(joined||full?"":"<input id='ge_"+g.id+"' type='email' placeholder='Your Google account email'><p class='tag'>The developer adds this email to their Google test list.</p>")+"<div class='bar'><i style='width:"+g.testers/12*100+"%'></i></div><div class='tag'>"+g.testers+" of 12 testers</div></div>"});
  }
  else if(S.tab==="mine"){
   h+=reportHtml();h+="<h2>Add your game</h2><div class='card'><input id='gn' placeholder='Game name'><input id='gl' placeholder='Closed test opt-in link from Play Console'><button class='btn' onclick='addGame()'>List game for "+M(C.fee)+"</button><p class='tag'>Paid from your wallet. Your 12 testers are paid "+M(C.reward)+" each.</p></div><h2>Your games</h2>";
   var mine=S.games.filter(function(g){return g.dev===S.user.uid});if(!mine.length)h+="<p>No games listed yet.</p>";
   mine.forEach(function(g){var ready=g.completed>=12;
-   h+="<div class='card'><div class='row'><b>"+esc(g.name)+"</b><span class='tag "+(ready?"ok":"")+"'>"+(ready?"Ready for production":"Test running")+"</span></div><div class='bar'><i style='width:"+g.testers/12*100+"%'></i></div><div class='tag'>"+g.testers+" of 12 testers joined · "+g.completed+" finished 14 days</div>"+(ready?"<p class='ok'>Apply for production access in Play Console.</p>":"")+"<button class='btn ghost' onclick='report(\""+g.id+"\")'>View test report</button></div>"});
+   h+="<div class='card'><div class='row'><b>"+esc(g.name)+"</b><span class='tag "+(ready?"ok":"")+"'>"+(ready?"Ready for production":"Test running")+"</span></div><div class='bar'><i style='width:"+g.testers/12*100+"%'></i></div><div class='tag'>"+g.testers+" of 12 testers joined · "+g.completed+" finished 14 days</div>"+(ready?"<p class='ok'>Apply for production access in Play Console.</p>":"")+(g.pending>0?"<p class='tag' style='color:var(--coin);font-weight:600'>"+g.pending+" tester(s) waiting for you. Open the report to see their emails.</p>":"")+"<button class='btn ghost' onclick='report(\""+g.id+"\")'>View test report</button></div>"});
  }
  else if(S.tab==="wallet"){
   h+="<h2>Wallet</h2><div class='card'><div class='row'><div><b style='font-size:22px'>"+M(S.earned)+"</b><div class='tag'>Earned. You can withdraw this.</div></div><div><b style='font-size:22px'>"+M(S.balance)+"</b><div class='tag'>Added by card. For listing games.</div></div></div></div>";
@@ -162,13 +164,16 @@ function render(){
  $("app").innerHTML=h;
 }
 function reportHtml(){var R=S.report;if(!R)return"";
- var rows=R.testers.map(function(t){return"<div class='row tag'><span>Tester "+t.n+"</span><span>"+t.days+" of 14 days</span><span>Last check-in "+esc(t.last)+"</span><span>"+(t.feedback?"Feedback sent":"No feedback yet")+"</span></div>"}).join("");
+ var rows=R.testers.map(function(t){return"<div class='tag' style='padding:8px 0;border-bottom:1px solid var(--line)'><b style='color:var(--ink)'>Tester "+t.n+"</b> · "+esc(t.email||"no email")+"<br>"+(t.approved?(t.days+" of 14 days · "+(t.feedback?"feedback sent":"no feedback yet")):"<span style='color:var(--coin);font-weight:600'>Waiting for you</span> <button class='btn' style='padding:6px 10px;margin-left:8px' onclick='approve(\""+R.id+"\",\""+esc(t.email)+"\")'>I added them</button>")+"</div>"}).join("");
  var fbs=R.testers.filter(function(t){return t.feedback}).map(function(t){return"<p style='margin:6px 0;color:var(--ink)'>Tester "+t.n+": "+esc(t.feedback)+"</p>"}).join("");
- return"<h2>Test report: "+esc(R.name)+"</h2><div class='card'>"+(rows||"<p>No testers yet.</p>")+(fbs?"<h2>Feedback</h2>"+fbs:"")+"<div class='row' style='margin-top:10px'><button class='btn' onclick='copyReport()'>Copy summary</button><button class='btn ghost' onclick='S.report=null;render()'>Close</button></div><p class='tag'>Paste the summary into the Play Console production access form, then add what you changed after the feedback.</p></div>"}
+ return"<h2>Test report: "+esc(R.name)+"</h2><div class='card'>"+(rows||"<p>No testers yet.</p>")+(fbs?"<h2>Feedback</h2>"+fbs:"")+"<div class='row' style='margin-top:10px'><button class='btn' onclick='copyReport()'>Copy summary</button><button class='btn ghost' onclick='copyPending()'>Copy waiting emails</button><button class='btn ghost' onclick='S.report=null;render()'>Close</button></div><p class='tag'>Paste the summary into the Play Console production access form, then add what you changed after the feedback.</p></div>"}
 function copyReport(){var R=S.report,fb=R.testers.filter(function(t){return t.feedback}),done=R.testers.filter(function(t){return t.days>=14}).length;
  var t="Closed test for "+R.name+": "+R.testers.length+" testers joined through the opt-in link. "+done+" checked in on 14 separate days. "+fb.length+" sent written feedback.\\n\\nFeedback received:\\n"+fb.map(function(x){return"- "+x.feedback}).join("\\n")+"\\n\\nChanges I made after this feedback: ";
  (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){toast("Summary copied")}).catch(function(){toast("Couldn’t copy. Select and copy the feedback above.")})}
 function adminList(){sb.rpc("admin_list_game",{p_name:$("af_n").value,p_link:$("af_l").value,p_owner_email:$("af_o").value.trim()||null}).then(function(r){if(r.error){toast(r.error.message);return}toast("Game listed for free");refresh()})}
+function joinWith(id){var e=$("ge_"+id);var v=e?e.value.trim():"";if(!v){toast("Enter your Google account email first");return}call("joinGame",{gameId:id,email:v},"Request sent. Wait for the developer to add you.")}
+function approve(gid,email){call("approveTester",{gameId:gid,email:email},"Marked as added").then(function(){report(gid)})}
+function copyPending(){var t=(S.report.testers||[]).filter(function(x){return !x.approved&&x.email}).map(function(x){return x.email}).join(", ");if(!t){toast("No one is waiting");return}(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){toast("Emails copied. Add them in Play Console, then tap I added them.")}).catch(function(){toast("Couldn’t copy")})}
 function loadAccts(){sb.rpc("admin_list_users").then(function(r){if(r.error){toast(r.error.message);return}S.accts=r.data||[];render()})}
 function copyEmails(){var t=(S.accts||[]).map(function(x){return x.u_email}).filter(Boolean).join(", ");(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){toast("Emails copied")}).catch(function(){toast("Couldn’t copy")})}
 function login(){sb.auth.signInWithPassword({email:$("em").value.trim(),password:$("pw").value}).then(function(r){if(r.error)toast(r.error.message)})}
@@ -177,7 +182,7 @@ function signup(){if(!$("ag").checked){toast("Tick the box to confirm you are 18
 function addGame(){call("listGame",{name:$("gn").value,link:$("gl").value},"Game listed")}
 function claim(id){call("claimReward",{gameId:id,feedback:$("fb_"+id).value},"Paid into your wallet")}
 function openLink(id){sb.from("game_links").select("link").eq("game_id",id).maybeSingle().then(function(r){if(r.data){window.open(r.data.link,"_blank");sb.rpc("mark_link_opened",{p_game:id}).then(function(x){if(x.error)toast(x.error.message);else{toast("Link opened. You can check in now.");refresh()}})}else toast("Join the game first")})}
-function report(id){sb.rpc("get_report",{p_game:id}).then(function(r){if(r.error){toast(r.error.message);return}S.report=r.data;render()})}
+function report(id){sb.rpc("get_report",{p_game:id}).then(function(r){if(r.error){toast(r.error.message);return}S.report=r.data;S.report.id=id;render()})}
 function buy(cents,cur){cur=cur||"USD";var ref="tl_"+S.user.uid.slice(0,6)+"_"+Date.now(),amt=cur==="NGN"?Math.round(cents/100*S.cfg.ngn):cents/100;
  var o={public_key:FLW_PUBLIC,tx_ref:ref,amount:amt,currency:cur,customer:{email:S.user.email},customizations:{title:"TestLoop wallet"},
   callback:function(r){var tid=r&&(r.transaction_id||r.id);call("deposit",{cents:cents,reference:ref,transactionId:tid},"Money added")},onclose:function(){}};
